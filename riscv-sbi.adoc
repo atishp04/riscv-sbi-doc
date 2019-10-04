@@ -80,6 +80,36 @@ Standard SBI error codes are listed below
 |  SBI_ERR_ALREADY_AVAILABLE | -6
 |===
 
+Every SBI function should prefer `unsigned long` as the data type if possible.
+It keeps the specification simple and easily adaptable for all RISC-V
+ISA types (i.e. RV32, RV64 and RV128). In case the data is defined as 32bit wide,
+the upper 32 bits should be considered as reserved bits unless otherwise specified.
+
+If a SBI function need to pass a list of harts to the higher privilege mode, it
+must use hart mask as defined below. This is applicable to any extensions defined
+in or after v0.2.
+
+Any function, requiring a hart mask, need to pass following two arguments.
+
+* `unsigned long hart_mask` is a scalar bit-vector containing hartids
+* `unsigned long hart_mask_base` is the starting hartid from which bit-vector
+   must be computed.
+
+In a single SBI function call, maximum number harts that can be set is always XLEN.
+If a lower privilege mode need to pass information about more than XLEN harts, it
+should invoke multiple instance of the SBI function call.
+
+Any function using hart mask may return following possible error values in addition
+to function specific error values.
+
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_ERR_INVALID_PARAM     | Either `hart_mask_base` or any of the hartid from `hart_mask`
+                              is not valid i.e. either the hartid is not enabled by the
+			      platform or is not available to the supervisor.
+|===
+
 == SBI Base Functionality, Extension ID 0x10
 
 The base of the supervisor binary interface is designed to be as small as
@@ -154,7 +184,7 @@ value for any of these CSRs.
 == Legacy SBI Extension, Extension IDs 0x00 through 0x0F
 
 The legacy SBI ignores the function ID field, instead being encoded as multiple
-extension IDs.  Each of these extension IDs must be probed for directly.  This
+extension IDs. Each of these extension IDs must be probed for directly.  This
 extension is deprecated in favor of the following extensions:
 
 [source, C]
@@ -258,6 +288,152 @@ call doesn't return.
 | *RESERVED*                |             |    0x09-0x0F |
 |===
 
+
+== Timer Extension, Extension ID: 0x54494D45 (TIME)
+This is a replacement of legacy timer extension (0x00). It follows the new calling
+convention defined in v0.2.
+
+[source, C]
+----
+struct sbiret sbi_set_timer(uint64_t stime_value)
+----
+Programs the clock for next event after *stime_value* time. *stime_value* is in absolute
+time. This function also clears the pending timer interrupt bit.
+
+If the supervisor wishes to clear the timer interrupt without scheduling the next
+timer event, it can either request a timer interrupt infinitely far into the
+future (i.e., (uint64_t)-1), or it can instead mask the timer interrupt by
+clearing sie.STIE.
+
+== IPI Extension, Extension ID: 0x735049 (IPI)
+This extension replaces the IPI related legacy extension (0x03). All the functions
+follow the `hart_mask` defined in binary encoding section.
+
+[source, C]
+----
+struct sbiret sbi_send_ipi(const unsigned long hart_mask, unsigned long hart_mask_base)
+----
+Send an inter-processor interrupt to all the harts defined in hart_mask.
+Interprocessor interrupts manifest at the receiving harts as Supervisor Software
+Interrupts.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+|===
+
+== RFENCE Extension, Extension ID: 0x52464E43 (RFNC)
+This extension replaces the remote fence related legacy extensions (0x05-0x07).
+All the functions follow the `hart_mask` as defined in binary encoding section.
+
+[source, C]
+----
+struct sbiret sbi_remote_fence_i(const unsigned long hart_mask, unsigned long hart_mask_base)
+----
+Instructs remote harts to execute FENCE.I instruction.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+|===
+
+[source, C]
+----
+struct sbiret sbi_remote_sfence_vma(const unsigned long hart_mask,
+				    unsigned long hart_mask_base,
+				    unsigned long start_addr,
+				    unsigned long size)
+----
+Instructs the remote harts to execute one or more SFENCE.VMA instructions,
+covering the range of virtual addresses between start and size.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+| SBI_ERR_INVALID_ADDRESS   | `start_addr` or `size` is not valid.
+|===
+
+[source, C]
+----
+struct sbiret sbi_remote_sfence_vma_asid(const unsigned long hart_mask,
+				unsigned long hart_mask_base,
+                                unsigned long start_addr, unsigned long size,
+                                unsigned long asid)
+----
+Instruct the remote harts to execute one or more SFENCE.VMA instructions,
+covering the range of virtual addresses between start and size.  This covers
+only the given ASID.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+| SBI_ERR_INVALID_ADDRESS   | `start_addr` or `size` is not valid.
+|===
+
+[source, C]
+----
+struct sbiret sbi_remote_hfence_gvma_vmid(const unsigned long hart_mask,
+				unsigned long hart_mask_base,
+                                unsigned long start_addr, unsigned long size,
+                                unsigned long asid)
+----
+Instruct the remote harts to execute one or more HFENCE.GVMA instructions,
+covering the range of guest physical addresses between start and size.  This covers
+only the given VMID. This function call is only valid for harts implementing hypervisor
+extension.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+| SBI_ERR_NOT_SUPPORTED	    | This function is not supported as it is not implemented or
+			      one of the target hart doesn't support hypervisor extension.
+| SBI_ERR_INVALID_ADDRESS   | `start_addr` or `size` is not valid.
+|===
+
+[source, C]
+----
+struct sbiret sbi_remote_hfence_vvma_asid(const unsigned long hart_mask,
+				unsigned long hart_mask_base,
+                                unsigned long start_addr, unsigned long size,
+                                unsigned long asid)
+----
+Instruct the remote harts to execute one or more HFENCE.VMA instructions,
+covering the range of guest virtual addresses between start and size. This covers
+only the given guest ASID.This function call is only valid for harts implementing hypervisor
+extension.
+
+*Returns* following possible values via sbiret.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | IPI was sent to all the targeted harts successfully.
+| SBI_ERR_NOT_SUPPORTED	    | This function is not supported as it is not implemented or
+			      one of the target hart doesn't support hypervisor extension.
+| SBI_ERR_INVALID_ADDRESS   | `start_addr` or `size` is not valid.
+|===
+
+=== RFENCE Function Listing
+
+[cols="<,,>",options="header,compact"]
+|===
+| Function Name                 | Function ID | Extension ID
+| sbi_remote_fence_i            |           0 |   0x52464E43
+| sbi_remote_sfence_vma         |           1 |   0x52464E43
+| sbi_remote_sfence_vma_asid    |           2 |   0x52464E43
+| sbi_remote_hfence_gvma_vmid   |           3 |   0x52464E43
+| sbi_remote_hfence_vvma_asid   |           4 |   0x52464E43
+|===
+
 == Hart State Managment Extension, Extension ID: 0x48534D (HSM)
 
 The Hart State Management Extension introduces a set of functions that allow the
@@ -282,7 +458,7 @@ mode.
 *priv* is an opaque pointer to a opaque data segment that the caller can use to pass
 information about execution context.
 
-*Returns* one of the following possible SBI error codes thorugh sbiret.error.
+*Returns* one of the following possible SBI error codes through sbiret.error.
 
 [cols="<,>",options="header,compact"]
 |===
@@ -343,6 +519,70 @@ state of the hart at the time of return value verification.
 | sbi_hart_start      		|           0 |     0x48534D
 | sbi_hart_stop           	|           1 |     0x48534D
 | sbi_hart_get_status      	|           2 |     0x48534D
+|===
+
+== System Reboot Extension, Extension ID: 0x53524254 (SRBT)
+
+The System Reboot Extension provides a set of functions that allow the
+supervisor software to request system-level reboot or shutdown.
+
+[source, C]
+----
+struct sbiret sbi_system_reboot(unsigned long reboot_type)
+----
+
+Reboot the system based on provided reboot type. This is a synchronous call
+and is not expected to return if succeeds.
+
+The reboot_type parameter is 32 bit wide and has following possible values:
+
+[cols="<,>",options="header,compact"]
+|===
+| Value                 	| Description
+| 0x00000000			| Cold reboot
+| 0x00000001			| Warm reboot
+| 0x00000002 - 0xEFFFFFFF	| Reserved for future use
+| 0xF0000000 - 0xFFFFFFFF	| Vendor or platform specific reboot type
+| 0x100000000 - 2^XELN-1	| Reserved for RV64/RV128
+|===
+
+*Returns* one of the following possible SBI error codes through sbiret.error
+upon failure.
+
+Cold reboot results in complete power cycle of the entire system while
+warm reboot depends on SOC vendor design choices.
+
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_ERR_INVALID_PARAM     | `reboot_type` is not valid.
+| SBI_ERR_FAILED            | Reboot request failed for unknown reasons.
+|===
+
+[source, C]
+----
+struct sbiret sbi_system_shutdown()
+----
+
+Shutdown the system. This is a synchronous call and is not expected to
+return if succeeds.
+
+*Returns* one of the following possible SBI error codes through sbiret.error
+upon failure.
+
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_ERR_FAILED            | The start request failed for unknown reasons.
+|===
+
+=== SRBT Function Listing
+
+[cols="<,,>",options="header,compact"]
+|===
+| Function Name                 | Function ID | Extension ID
+| sbi_system_reboot    		|           0 |   0x53524254
+| sbi_system_shutdown          	|           1 |   0x53524254
 |===
 
 == Experimental SBI Extension Space, Extension IDs 0x0800000 through 0x08FFFFFF
