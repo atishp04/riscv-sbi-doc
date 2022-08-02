@@ -1571,17 +1571,25 @@ The bit definitions of the `start_flags` parameter are shown in the
 .PMU Counter Start Flags
 [cols="3,1,2", width=90%, align="center", options="header"]
 |===
-| Flag Name                    | Bits       | Description
-| SBI_PMU_START_SET_INIT_VALUE | 0:0        | Set the value of counters
-                                              based on the `initial_value`
-                                              parameter
-| *RESERVED*                   | 1:(XLEN-1) | All non-zero values are
-                                              reserved for future use
+| Flag Name                        | Bits       | Description
+| SBI_PMU_START_SET_INIT_VALUE     | 0:0        | Set the value of counters
+                                                  based on the `initial_value`
+                                                  parameter
+| SBI_PMU_START_FLAG_INIT_SNAPSHOT | 1:1        | Initialize the counters from 
+						  shared memory.
+| *RESERVED*                       | 2:(XLEN-1) | Reserved for future use
 |===
 
 *NOTE:* When SBI_PMU_START_SET_INIT_VALUE is not set in `start_flags`,
 the counter value will not be modified and event counting will start
 from current counter value.
+
+*NOTE:* The shared memory address must be set during boot via `sbi_pmu_setup_snapshot_area`
+before using the `SBI_PMU_START_FLAG_INIT_SNAPSHOT` flag. SBI implementation
+must initializes all the valid counters(to be started) from the value
+set in the shared snapshot memory. Both `SBI_PMU_START_SET_INIT_VALUE` and
+`SBI_PMU_START_FLAG_INIT_SNAPSHOT` can not be set together as the former is
+valid only for a single counter.
 
 The possible error codes returned in `sbiret.error` are shown in the
 <<table_pmu_counter_start_errors>> below.
@@ -1594,6 +1602,8 @@ The possible error codes returned in `sbiret.error` are shown in the
 | SBI_SUCCESS             | counter started successfully.
 | SBI_ERR_INVALID_PARAM   | some of the counters specified in parameters
                             are invalid.
+                            Snapshot address is not configured and `SBI_PMU_START_FLAG_INIT_SNAPSHOT`
+			    is set in the flags.
 | SBI_ERR_ALREADY_STARTED | some of the counters specified in parameters
                             are already started.
 |===
@@ -1616,11 +1626,19 @@ definitions of the `stop_flags` parameter are shown in the
 .PMU Counter Stop Flags
 [cols="3,1,2", width=90%, align="center", options="header"]
 |===
-| Flag Name               | Bits       | Description
-| SBI_PMU_STOP_FLAG_RESET | 0:0        | Reset the counter to event mapping.
-| *RESERVED*              | 1:(XLEN-1) | All non-zero values are reserved
-                                         for future use
+| Flag Name                       | Bits       | Description
+| SBI_PMU_STOP_FLAG_RESET         | 0:0        | Reset the counter to event mapping.
+| SBI_PMU_STOP_FLAG_TAKE_SNAPSHOT | 1:1        | Save a snapshot of counter state.
+| *RESERVED*                      | 2:(XLEN-1) | Reserved for future use
 |===
+
+
+*NOTE:*: The shared memory address must be set during boot via `sbi_pmu_setup_snapshot_area`
+before using the `SBI_PMU_STOP_FLAG_TAKE_SNAPSHOT` flag. The SBI implementation
+must save the current value of all the stopped counters in the shared memory 
+if `SBI_PMU_STOP_FLAG_TAKE_SNAPSHOT` is set. The current
+value of the *SCOUNTOVF* must also be updated in the shared memory. 
+The values corresponding to all other counters must not be modified.
 
 The possible error codes returned in `sbiret.error` are shown in the
 <<table_pmu_counter_stop_errors>> below.
@@ -1633,6 +1651,8 @@ The possible error codes returned in `sbiret.error` are shown in the
 | SBI_SUCCESS             | counter stopped successfully.
 | SBI_ERR_INVALID_PARAM   | some of the counters specified in parameters
                             are invalid.
+                            Snapshot address is not configured and `SBI_PMU_STOP_FLAG_TAKE_SNAPSHOT`
+			    is set in the flags.
 | SBI_ERR_ALREADY_STOPPED | some of the counters specified in parameters
                             are already stopped.
 |===
@@ -1659,6 +1679,52 @@ The possible error codes returned in `sbiret.error` are shown in the
                           or an invalid counter.
 |===
 
+=== Function: Enable counter value snapshot feature (FID #6)
+
+[source, C]
+----
+struct sbiret sbi_pmu_setup_snapshot_area(unsigned long snapshot_addr_in_out)
+----
+
+Setup a shared memory area for PMU state snapshot. The `snapshot_addr_in_out`
+parameter contains the pysical address of the shared memory. The shared memory
+will keep a copy of the following structure.
+
+struct sbi_pmu_snapshot_data {
+	uint64_t counter[XLEN];
+	uint32_t scountovf;
+}
+
+Each field of the structure is defined below.
+
+`counter`   : An array of XLEN length where each index represent the value of each
+              logical counter associated with a hardware/firmware.
+`scountovf` : Value of the `scountovf` CSR.
+
+Any future revisions to this structure should be made in a backward compatible
+manner and will be associated with a SBI version. 
+
+Once configured, the SBI implementation has the read/write access to the
+shared memory only during the `sbi_pmu_counter_stop` and read access during the
+`sbi_pmu_counter_start` call only if the corresponding flag is set.
+The SBI implementation must not touch this memory any other time.
+This function should be invoked only once per hart at boot time.
+
+The possible error codes returned in `sbiret.error` are shown in the
+<<table_pmu_counter_fw_read_errors>> below.
+
+[#table_pmu_counter_fw_read_errors]
+.PMU Counter Firmware Read Errors
+[cols="2,3", width=90%, align="center", options="header"]
+|===
+| Error code              | Description
+| SBI_SUCCESS             | firmware counter read successfully.
+| SBI_INVALID_PARAM       | In compatible SBI version. 
+| SBI_ERR_INVALID_ADDRESS | The address is not valid because
+			    The address doesn't belong to a valid memory region
+			    The supervisor software doesn't have read/write access
+|===
+
 === Function Listing
 
 [#table_pmu_function_list]
@@ -1672,6 +1738,7 @@ The possible error codes returned in `sbiret.error` are shown in the
 | sbi_pmu_counter_start           | 0.3         | 3   | 0x504D55
 | sbi_pmu_counter_stop            | 0.3         | 4   | 0x504D55
 | sbi_pmu_counter_fw_read         | 0.3         | 5   | 0x504D55
+| sbi_pmu_setup_snapshot_area     | 2.0         | 6   | 0x504D55
 |===
 
 == Experimental SBI Extension Space (EIDs #0x08000000 - #0x08FFFFFF)
