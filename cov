@@ -1,0 +1,12 @@
+This patch adds few improvements to the SBI PMU extension in order to
+minimize the traps while accessing hpmcounters in VS mode & starting
+multiple counter with an initial value at the same time.
+
+The PoC is available here:
+https://github.com/atishp04/linux/tree/kvm_perf_snapshot_rfc
+
+This patch can also be found here:
+https://github.com/atishp04/riscv-sbi-doc/tree/pmu_snapshot_rfc  
+
+option-subject SBI PMU extension improvement 
+option-prefix RFC
