@@ -35,14 +35,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y pandoc asciidoctor ditaa ruby-asciidoctor-pdf
-
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: '3.0.6' # specify the Ruby version you need
-
-    - name: Install asciidoctor-bibtex gem
-      run: gem install asciidoctor-bibtex
+        sudo gem install asciidoctor-bibtex
 
     # Step 3: Build Files
     - name: Build Files
